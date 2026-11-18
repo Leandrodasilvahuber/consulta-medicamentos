@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Área do Médico</title>
+  <link rel="stylesheet" href="/admin/admin.css" />
+</head>
+<body>
+  <script src="/admin/admin.js"></script>
+  <script>nav();</script>
+  <main>
+    <h1>Área do Médico</h1>
+    <p class="sub">Consultas pagas e confirmadas aguardando atendimento. Ao finalizar, a receita é emitida de forma assíncrona.</p>
+    <div class="kpis"><div class="kpi"><b id="k-wait">–</b><span>aguardando atendimento</span></div>
+      <div class="kpi"><b id="k-done">–</b><span>atendidas</span></div><div class="kpi"><b id="k-rx">–</b><span>receitas emitidas</span></div></div>
+    <div class="card"><h2>Fila de atendimento</h2><div id="queue"></div></div>
+    <div class="card" id="attend" hidden>
+      <h2>Atendimento — <span id="a-name"></span></h2>
+      <p><a id="a-room" target="_blank">Abrir sala de vídeo (fake)</a></p>
+      <div id="a-items"></div>
+      <div class="row" style="margin-top:8px"><textarea id="a-notes" rows="2" cols="60" placeholder="Posologia / observações"></textarea></div>
+      <div class="row" style="margin-top:8px"><button id="a-send">Finalizar consulta e emitir receita</button><button class="ghost" onclick="$('#attend').hidden=true">Cancelar</button></div>
+    </div>
+    <div class="card"><h2>Receitas emitidas</h2><div id="rx"></div></div>
+  </main>
+  <script>
+    let products = [], current, byId = {};
+    api('/venda/products').then((p) => (products = p));
+    async function load() {
+      const [cons, rx] = await Promise.all([api('/consulta/consultations'), api('/receita/prescriptions')]);
+      byId = Object.fromEntries(cons.map((c) => [c.pk, c]));
+      const waiting = cons.filter((c) => c.status === 'SCHEDULED').sort((a, b) => a.slot.localeCompare(b.slot));
+      $('#k-wait').textContent = waiting.length;
+      $('#k-done').textContent = cons.filter((c) => c.status === 'COMPLETED').length;
+      $('#k-rx').textContent = rx.length;
+      $('#queue').innerHTML = table(waiting, [
+        ['Horário', (c) => fmtDate(c.slot)], ['Paciente', (c) => esc(c.customerName || c.customerId)],
+        ['Médico', (c) => esc(c.doctor)], ['Status', (c) => badge(c.status)],
+        ['', (c) => `<button onclick="attend('${c.pk}')">Atender</button>`],
+      ], 'Nenhuma consulta aguardando.');
+      $('#rx').innerHTML = table(rx.sort((a, b) => b.issuedAt.localeCompare(a.issuedAt)), [
+        ['Emitida', (r) => fmtDate(r.issuedAt)], ['Paciente', (r) => `<span class="mono">${esc(r.customerId.slice(0, 8))}</span>`],
+        ['Itens', (r) => r.items.map((i) => `${esc(i.sku)} (máx ${i.maxQty})`).join('<br>')],
+        ['Validade', (r) => fmtDate(r.expiresAt).slice(0, 10)], ['Receita', (r) => `<span class="mono">${esc(r.pk)}</span>`],
+      ]);
+    }
+    window.attend = (id) => {
+      const c = (current = byId[id]);
+      $('#attend').hidden = false;
+      $('#a-name').textContent = c.customerName || c.customerId;
+      $('#a-room').href = c.roomUrl;
+      $('#a-items').innerHTML = table(products, [
+        ['Prescrever', (p) => `<input type="checkbox" data-sku="${p.sku}">`], ['Produto', (p) => esc(p.name)],
+        ['Qtd. máxima', (p) => `<input type="number" min="1" value="2" style="width:70px" data-max="${p.sku}">`],
+      ]);
+    };
+    $('#a-send').onclick = () => act(async () => {
+      const items = [...document.querySelectorAll('[data-sku]:checked')].map((el) => ({
+        sku: el.dataset.sku, maxQty: Number(document.querySelector(`[data-max="${el.dataset.sku}"]`).value),
+      }));
+      if (!items.length) throw new Error('selecione ao menos um produto');
+      await api(`/consulta/consultations/${current.pk}/complete`, { items, notes: $('#a-notes').value });
+      $('#attend').hidden = true;
+      setTimeout(load, 1500);
+    }, 'Consulta finalizada — receita sendo emitida');
+    every(5000, load);
+  </script>
+</body>
+</html>

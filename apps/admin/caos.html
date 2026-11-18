@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Laboratório de Caos</title>
+  <link rel="stylesheet" href="/admin/admin.css" />
+</head>
+<body>
+  <script src="/admin/admin.js"></script>
+  <script>nav();</script>
+  <main>
+    <h1>Laboratório de Caos</h1>
+    <p class="sub">Hipótese de estado estável: <b>todo pedido pago chega a ENTREGUE</b>, sem perda de evento e sem cobrança duplicada, mesmo com falhas.
+      Injete uma falha, rode uma compra e observe a recuperação.</p>
+    <div class="kpis" id="steady"></div>
+
+    <div class="grid">
+      <div class="card">
+        <h2>Experimentos guiados</h2>
+        <div id="presets"></div>
+      </div>
+      <div class="card">
+        <h2>Verificar estado estável</h2>
+        <p class="muted">Executa uma compra completa sintética (cadastro → consulta → receita → pedido → NF → entrega) e mede o tempo.</p>
+        <button id="probe">Rodar sonda E2E</button>
+        <pre id="probe-log" style="margin-top:10px;min-height:60px"></pre>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h2>Falhas na aplicação</h2>
+        <form id="faults" style="display:grid;gap:8px">
+          <label>Alvo <select name="target" id="target"></select></label>
+          <label>Latência extra (ms) <input name="latencyMs" type="number" value="0" min="0" step="100" /></label>
+          <label>Taxa de erro HTTP <input name="httpErrorRate" type="number" value="0" min="0" max="1" step="0.1" /></label>
+          <label>Taxa de erro no consumidor de eventos <input name="consumerErrorRate" type="number" value="0" min="0" max="1" step="0.1" /></label>
+          <div class="row"><button>Aplicar</button><button type="button" class="ghost" id="clear">Limpar todas as falhas</button></div>
+        </form>
+        <div id="active" style="margin-top:10px"></div>
+      </div>
+      <div class="card">
+        <h2>Falhas de infraestrutura</h2>
+        <form id="infra" style="display:grid;gap:8px">
+          <label>Serviço <select name="service" id="svc"></select></label>
+          <label>Ação <select name="action"><option value="kill">matar réplica (kill)</option><option value="pause">congelar (pause)</option><option value="restart">reiniciar</option><option value="stop">parar</option></select></label>
+          <label>Quais <select name="which"><option value="random">1 réplica aleatória</option><option value="all">todas as réplicas</option></select></label>
+          <label>Recuperar automaticamente após (s) <input name="durationSec" type="number" value="30" /></label>
+          <button class="danger">Executar</button>
+        </form>
+        <div class="row" style="margin-top:12px">
+          <button class="danger" id="outage">AWS fora do ar (LocalStack pausada 20s)</button>
+          <button class="ghost" id="poison">Injetar 3 mensagens envenenadas</button>
+          <button class="ghost" id="burst">Rajada de 200 NFs</button>
+        </div>
+      </div>
+    </div>
+    <div class="card"><h2>Diário de experimentos</h2><div id="journal"></div></div>
+  </main>
+  <script>
+    const SERVICES = 'cadastro agendamento consulta receita venda pedido pagamento estoque entrega nf-worker gateway'.split(' ');
+    $('#target').innerHTML = '<option value="*">todos os serviços</option>' + SERVICES.map((s) => `<option>${s}</option>`).join('');
+    $('#svc').innerHTML = SERVICES.map((s) => `<option>${s}</option>`).join('');
+
+    const PRESETS = [
+      { t: 'Perda de réplica', h: 'Matar 1 réplica de pedido e pagamento: a outra assume a fila; o gateway refaz a requisição em outra réplica.',
+        run: async () => { await api('/admin/chaos/container', { service: 'pedido', action: 'kill', which: 'random', durationSec: 30 }); await api('/admin/chaos/container', { service: 'pagamento', action: 'kill', which: 'random', durationSec: 30 }); } },
+      { t: 'Consumidor instável (50% falha)', h: 'Metade dos eventos falha: o SQS reentrega e a idempotência evita efeito duplicado. Tudo termina ENTREGUE, só que mais devagar.',
+        run: () => api('/admin/chaos/faults', { target: '*', consumerErrorRate: 0.5 }) },
+      { t: 'Serviço sempre quebrado → DLQ', h: 'A NF falha 100%: após 5 tentativas a mensagem vai para a DLQ. Limpe a falha e faça o redrive em Operações.',
+        run: () => api('/admin/chaos/faults', { target: 'nf-worker', consumerErrorRate: 1 }) },
+      { t: 'Latência de 2s na venda', h: 'O checkout fica lento mas responde; o restante do fluxo, assíncrono, não é afetado.',
+        run: () => api('/admin/chaos/faults', { target: 'venda', latencyMs: 2000 }) },
+      { t: 'Queda da AWS', h: 'Sem SQS/DynamoDB/EventBridge por 20s: os SDKs refazem as chamadas, os consumidores voltam sozinhos e nenhum evento se perde.',
+        run: () => api('/admin/chaos/aws-outage', { seconds: 20 }) },
+      { t: 'Pico de NF', h: '200 NFs na fila: o backlog sobe e os workers drenam (rode scripts/autoscale-nf.sh para ver o autoscaling).',
+        run: () => api('/admin/chaos/burst', { count: 200 }) },
+    ];
+    $('#presets').innerHTML = PRESETS.map((p, i) => `<div style="border-bottom:1px solid var(--b);padding:8px 0"><b>${p.t}</b><p class="muted" style="margin:4px 0">${p.h}</p><button onclick="preset(${i})">Iniciar</button></div>`).join('');
+    window.preset = (i) => act(() => PRESETS[i].run().then(load), 'Experimento iniciado: ' + PRESETS[i].t);
+
+    async function load() {
+      const [o, ch] = await Promise.all([api('/admin/overview'), api('/admin/chaos')]);
+      $('#steady').innerHTML = [
+        [`${o.containersUp}/${o.containersTotal}`, 'containers rodando', o.containersUp < o.containersTotal],
+        [o.backlog, 'eventos aguardando nas filas', o.backlog > 20], [o.dlqTotal, 'mensagens na DLQ', o.dlqTotal > 0],
+        [ch.faults.length, 'falhas ativas', ch.faults.length > 0],
+      ].map(([v, l, bad]) => `<div class="kpi"><b style="color:${bad ? 'var(--err)' : 'var(--ok)'}">${v}</b><span>${l}</span></div>`).join('');
+      $('#active').innerHTML = table(ch.faults, [
+        ['Alvo', (f) => esc(f.pk)], ['Latência', (f) => f.latencyMs + ' ms', 'num'],
+        ['Erro HTTP', (f) => f.httpErrorRate * 100 + '%', 'num'], ['Erro consumidor', (f) => f.consumerErrorRate * 100 + '%', 'num'],
+      ], 'Nenhuma falha ativa.');
+      $('#journal').innerHTML = table(ch.journal, [
+        ['Quando', (j) => fmtDate(j.at)], ['Ação', (j) => `<b>${esc(j.action)}</b>`], ['Detalhes', (j) => `<span class="mono">${esc(JSON.stringify(j.details))}</span>`],
+      ], 'Nenhum experimento ainda.');
+    }
+    $('#faults').onsubmit = (e) => { e.preventDefault(); act(() => api('/admin/chaos/faults', Object.fromEntries(new FormData(e.target))).then(load), 'Falha aplicada (vale em até 3s)'); };
+    $('#clear').onclick = () => act(() => api('/admin/chaos/faults/clear', {}).then(load), 'Falhas removidas');
+    $('#infra').onsubmit = (e) => { e.preventDefault(); act(() => api('/admin/chaos/container', Object.fromEntries(new FormData(e.target))).then((r) => { toast(r.action + ': ' + r.containers.join(', ')); load(); })); };
+    $('#outage').onclick = () => act(() => api('/admin/chaos/aws-outage', { seconds: 20 }).then(load), 'LocalStack pausada por 20s');
+    $('#poison').onclick = () => act(() => api('/admin/chaos/poison', { queue: 'cm-pedido-q', count: 3 }).then(load), 'Veneno enviado para cm-pedido-q (DLQ em ~1 min)');
+    $('#burst').onclick = () => act(() => api('/admin/chaos/burst', { count: 200 }).then(load), '200 NFs sintéticas publicadas');
+
+    // sonda E2E executada no navegador (mesmo fluxo do scripts/e2e.sh)
+    const plog = (m) => ($('#probe-log').textContent += m + '\n');
+    const until = async (fn, ok, secs = 120) => {
+      for (let i = 0; i < secs; i++) { try { const v = await fn(); if (ok(v)) return v; } catch (e) { /* retry */ } await new Promise((r) => setTimeout(r, 1000)); }
+      throw new Error('timeout');
+    };
+    const retry = (fn) => until(fn, () => true, 30);
+    $('#probe').onclick = async () => {
+      $('#probe-log').textContent = ''; const t0 = Date.now();
+      try {
+        const k = crypto.randomUUID(); // mesma chave em cada retry = sem duplicidade mesmo com falhas
+        const c = await retry(() => api('/cadastro/customers', { name: 'Sonda Caos', document: '0', email: 'sonda@caos.local' }, k + 'c'));
+        const a = await retry(() => api('/agendamento/appointments', { customerId: c.id, customerName: c.name, slot: new Date().toISOString() }, k + 'a'));
+        plog('agendado ' + a.id.slice(0, 8));
+        await until(() => api('/consulta/consultations/' + a.id), (x) => x.status === 'SCHEDULED'); plog('consulta paga e confirmada');
+        await retry(() => api(`/consulta/consultations/${a.id}/complete`, { items: [{ sku: 'AMOXI-500', maxQty: 1 }] }, k + 'x'));
+        const rx = await until(() => api('/receita/prescriptions/by-consultation/' + a.id), (x) => x.pk); plog('receita ' + rx.pk.slice(0, 8));
+        const o = await until(() => api('/venda/checkout', { customerId: c.id, prescriptionId: rx.pk, items: [{ sku: 'AMOXI-500', qty: 1 }] }, k + 'o'), (x) => x.orderId, 60);
+        plog('pedido ' + o.orderId.slice(0, 8));
+        await until(() => api('/entrega/shipments/' + o.orderId), (s) => s.status === 'READY_TO_SHIP'); plog('NF emitida, pronto para despacho');
+        await retry(() => api(`/entrega/shipments/${o.orderId}/dispatch`, {}, k + 'd'));
+        const fin = await until(() => api('/pedido/orders/' + o.orderId), (x) => x.status === 'DELIVERED' || x.status === 'CANCELLED');
+        plog(`${fin.status === 'DELIVERED' ? '✅ ENTREGUE' : '❌ ' + fin.status} em ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+        plog('trace: ' + fin.traceId); $('#probe-log').insertAdjacentHTML('beforeend', `<a style="color:#9fe" href="ops.html?tab=Transações&trace=${fin.traceId}">ver transação</a>`);
+      } catch (e) { plog('❌ estado estável violado: ' + e.message + ` (${((Date.now() - t0) / 1000).toFixed(1)}s)`); }
+    };
+    every(4000, load);
+  </script>
+</body>
+</html>

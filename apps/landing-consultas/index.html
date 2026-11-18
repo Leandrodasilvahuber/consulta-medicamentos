@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@600;700;800&family=Inter:wght@400;600;700&display=swap" rel="stylesheet" />
+  <title>Vitalis · Consulta médica online</title>
+  <base href="/" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/"><img src="favicon.svg" alt="" /><span>Vitalis<br /><small>Farmácia &amp; Clínica</small></span></a>
+    <nav><a href="#agendar">Agendar</a><a href="/loja/">Farmácia</a><a href="/admin/paciente.html">Minha área</a><a href="/admin/">Backoffice</a></nav>
+  </header>
+  <section class="hero">
+    <div class="hero-inner">
+      <span class="eyebrow">🩺 Telemedicina · Clínico geral</span>
+      <h1>Consulta online e sua <em>receita</em> sem sair de casa</h1>
+      <p class="lead">Fale com um médico por vídeo, receba a receita digital e compre seus medicamentos na nossa farmácia.</p>
+      <a class="cta" href="#agendar">Agendar consulta →</a>
+      <a class="cta ghost" href="/loja/">Já tenho receita</a>
+      <div class="trust"><span>✓ Médicos com CRM ativo</span><span>✓ Receita digital válida por 180 dias</span><span>✓ Farmacêutico responsável</span></div>
+    </div>
+  </section>
+  <main>
+    <ol class="steps"><li>Agende e pague</li><li>Consulta por vídeo</li><li>Receita digital</li><li>Compre os medicamentos</li></ol>
+    <div class="panel" id="agendar">
+      <form class="card" id="f">
+        <h2>Agendar consulta</h2>
+        <p class="hint">Valor <span class="price">R$ 150</span> · pagamento PIX fake aprovado na hora</p>
+        <label>Nome<input name="name" required value="Paciente Demo" /></label>
+        <label>CPF<input name="document" required value="000.000.000-00" /></label>
+        <label>E-mail<input name="email" type="email" required value="demo@exemplo.com" /></label>
+        <label>Data e horário<input name="slot" type="datetime-local" required /></label>
+        <button class="btn">Agendar e pagar</button>
+      </form>
+      <div>
+        <div class="card track"><h3>Acompanhamento</h3><ul id="log"></ul></div>
+        <div class="card track" id="doctor" hidden style="margin-top:16px">
+          <h3>🩺 Simulação do médico</h3>
+          <p class="hint">Finaliza a consulta e prescreve Amoxicilina 500mg (máx. 2 caixas) e Omeprazol 20mg (máx. 1). Também dá para fazer pela <a href="/admin/medico.html">área do médico</a>.</p>
+          <button class="btn" id="complete" type="button">Finalizar consulta e emitir receita</button>
+        </div>
+      </div>
+    </div>
+  </main>
+  <footer>Vitalis Farmácia &amp; Clínica · demonstração fictícia, sem valor médico ou comercial · <a href="/loja/">Farmácia</a> · <a href="/admin/">Backoffice</a></footer>
+  <script src="api.js"></script>
+  <script>
+    loadCms('consultas');
+    document.querySelector('[name=slot]').value = new Date(Date.now() + 864e5).toISOString().slice(0, 16);
+    let appt, customer;
+    document.getElementById('f').onsubmit = async (e) => {
+      e.preventDefault();
+      const d = Object.fromEntries(new FormData(e.target));
+      try {
+        customer = await api('/cadastro/customers', { name: d.name, document: d.document, email: d.email });
+        out('Cadastro realizado');
+        appt = await api('/agendamento/appointments', { customerId: customer.id, customerName: customer.name, slot: d.slot });
+        out('Consulta agendada — aguardando pagamento');
+        await poll(() => api('/agendamento/appointments/' + appt.id), (a) => a.status === 'CONFIRMED');
+        out('Pagamento aprovado — consulta confirmada');
+        const c = await poll(() => api('/consulta/consultations/' + appt.id), (c) => c.roomUrl);
+        out('Sala da consulta online: ' + c.roomUrl);
+        document.getElementById('doctor').hidden = false;
+      } catch (err) { out('Erro: ' + err.message); }
+    };
+    document.getElementById('complete').onclick = async () => {
+      try {
+        await api(`/consulta/consultations/${appt.id}/complete`, {
+          notes: 'Amoxicilina: 1 cápsula de 8/8h por 7 dias. Omeprazol: 1 cápsula em jejum.', items: [{ sku: 'AMOXI-500', maxQty: 2 }, { sku: 'OMEP-20', maxQty: 1 }],
+        });
+        const rx = await poll(() => api('/receita/prescriptions/by-consultation/' + appt.id), (r) => r.pk);
+        out('Receita emitida — válida até ' + new Date(rx.expiresAt).toLocaleDateString('pt-BR'));
+        localStorage.setItem('cm-rx', JSON.stringify({ prescriptionId: rx.pk, customerId: customer.id }));
+        const li = document.createElement('li');
+        li.innerHTML = '<a href="/loja/"><b>Ir para a farmácia e comprar com esta receita →</b></a>';
+        document.getElementById('log').appendChild(li);
+      } catch (err) { out('Erro: ' + err.message); }
+    };
+  </script>
+</body>
+</html>

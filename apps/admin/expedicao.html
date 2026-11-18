@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Área do Expedidor</title>
+  <link rel="stylesheet" href="/admin/admin.css" />
+</head>
+<body>
+  <script src="/admin/admin.js"></script>
+  <script>nav();</script>
+  <main>
+    <h1>Área do Expedidor</h1>
+    <p class="sub">Pedidos com NF emitida entram na fila de separação. Despache e acompanhe até a entrega.</p>
+    <div class="kpis" id="kpis"></div>
+    <div class="card"><h2>1. Separar e despachar</h2><div id="ready"></div></div>
+    <div class="card"><h2>2. Em trânsito</h2><div id="transit"></div></div>
+    <div class="card"><h2>3. Entregues</h2><div id="done"></div></div>
+  </main>
+  <script>
+    const items = (s) => (s.lines || []).map((l) => `${l.qty}× ${esc(l.name || l.sku)}`).join('<br>');
+    async function load() {
+      const all = await api('/entrega/shipments');
+      const by = (st) => all.filter((s) => s.status === st).sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
+      $('#kpis').innerHTML = [['READY_TO_SHIP', 'para separar'], ['DISPATCHED', 'em trânsito'], ['DELIVERED', 'entregues']]
+        .map(([s, l]) => `<div class="kpi"><b>${by(s).length}</b><span>${l}</span></div>`).join('');
+      $('#ready').innerHTML = table(by('READY_TO_SHIP'), [
+        ['Pedido', (s) => `<span class="mono">${esc(s.orderId.slice(0, 8))}</span>`], ['Itens (picking)', items],
+        ['NF', (s) => esc(s.invoiceNumber)], ['Endereço', (s) => esc(s.address)],
+        ['', (s) => `<button onclick="dispatchIt('${s.orderId}')">Despachar</button>`],
+      ], 'Nada para separar.');
+      $('#transit').innerHTML = table(by('DISPATCHED'), [
+        ['Pedido', (s) => `<span class="mono">${esc(s.orderId.slice(0, 8))}</span>`], ['Rastreio', (s) => esc(s.trackingCode)],
+        ['Transportadora', (s) => esc(s.carrier)], ['Despachado', (s) => fmtDate(s.dispatchedAt)],
+        ['', (s) => `<button class="ghost" onclick="deliver('${s.orderId}')">Confirmar entrega</button>`],
+      ], 'Nada em trânsito.');
+      $('#done').innerHTML = table(by('DELIVERED').reverse().slice(0, 20), [
+        ['Pedido', (s) => `<span class="mono">${esc(s.orderId.slice(0, 8))}</span>`], ['Rastreio', (s) => esc(s.trackingCode)],
+        ['Entregue', (s) => fmtDate(s.deliveredAt)],
+      ]);
+    }
+    window.dispatchIt = (id) => act(() => api(`/entrega/shipments/${id}/dispatch`, {}).then(load), 'Despachado');
+    window.deliver = (id) => act(() => api(`/entrega/shipments/${id}/delivered`, {}).then(load), 'Entrega confirmada');
+    every(4000, load);
+  </script>
+</body>
+</html>

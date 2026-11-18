@@ -1,0 +1,26 @@
+name: CD (LocalStack)
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy-localstack:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sobe stack (LocalStack + serviços)
+        run: docker compose up -d --build localstack cadastro agendamento consulta receita venda pedido pagamento entrega nf-worker gateway
+      - name: Aguarda gateway
+        run: for i in $(seq 1 60); do curl -sf localhost:8080/health && break; sleep 2; done
+      - uses: hashicorp/setup-terraform@v3
+      - name: Terraform (EC2/ASG na LocalStack)
+        working-directory: infra/terraform
+        run: terraform init && terraform apply -auto-approve
+      - name: E2E
+        run: bash scripts/e2e.sh
+      - if: failure()
+        run: docker compose logs --tail=200

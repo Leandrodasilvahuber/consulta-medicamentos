@@ -1,0 +1,4 @@
+**/node_modules
+apps/cms
+.git
+infra/terraform/.terraform

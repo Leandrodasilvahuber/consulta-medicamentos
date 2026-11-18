@@ -1,0 +1,121 @@
+name: consulta-medicamentos
+
+x-node: &node
+  image: cm-node:local
+  build: .
+  restart: unless-stopped
+  environment: &env
+    AWS_REGION: us-east-1
+    AWS_ENDPOINT: http://localstack:4566
+    EVENT_BUS: cm-bus
+    PORT: '3000'
+  depends_on:
+    localstack: { condition: service_healthy }
+  networks: [backend]
+  deploy: &deploy
+    replicas: 2 # redundância: 2 réplicas por serviço, competing consumers na fila
+    resources: { limits: { memory: 128m } }
+
+services:
+  localstack:
+    image: localstack/localstack:3.8
+    ports: ['127.0.0.1:4566:4566']
+    environment:
+      SERVICES: events,sqs,dynamodb,s3,ec2,autoscaling,cloudwatch,iam,sts
+      PERSISTENCE: '0'
+    volumes:
+      - ./infra/localstack/init/ready.d:/etc/localstack/init/ready.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -s localhost:4566/_localstack/init/ready | grep -q ''"completed": true''']
+      interval: 5s
+      start_period: 60s
+      retries: 90 # bootstrap cria ~80 recursos
+    networks: [backend]
+
+  cadastro: { <<: *node, environment: { <<: *env, SERVICE: cadastro } }
+  agendamento: { <<: *node, environment: { <<: *env, SERVICE: agendamento } }
+  consulta: { <<: *node, environment: { <<: *env, SERVICE: consulta } }
+  receita: { <<: *node, environment: { <<: *env, SERVICE: receita } }
+  venda: { <<: *node, environment: { <<: *env, SERVICE: venda } }
+  pedido: { <<: *node, environment: { <<: *env, SERVICE: pedido } }
+  pagamento: { <<: *node, environment: { <<: *env, SERVICE: pagamento } }
+  entrega: { <<: *node, environment: { <<: *env, SERVICE: entrega } }
+  estoque: { <<: *node, environment: { <<: *env, SERVICE: estoque } }
+
+  # Backoffice de operações + laboratório de caos (fala com Docker API, SQS, DynamoDB e Zabbix)
+  admin:
+    <<: *node
+    user: root # acesso ao docker.sock (apenas local/demo)
+    environment: { <<: *env, SERVICE: admin, ZABBIX_API: http://zabbix-web:8080/api_jsonrpc.php }
+    volumes: ['/var/run/docker.sock:/var/run/docker.sock']
+    deploy: { replicas: 1, resources: { limits: { memory: 192m } } }
+
+  # Worker de NF: representa o Auto Scaling Group de EC2 (ver infra/terraform).
+  # Localmente escala com: scripts/autoscale-nf.sh (lê profundidade da fila) ou --scale nf-worker=N
+  nf-worker:
+    <<: *node
+    environment: { <<: *env, SERVICE: nf-worker }
+    deploy: { <<: *deploy, replicas: 2 }
+
+  gateway:
+    image: nginx:1.27-alpine
+    # portas só em 127.0.0.1: o admin controla o Docker, não pode ficar exposto na rede
+    ports: ['127.0.0.1:8080:80']
+    volumes:
+      - ./infra/gateway/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./apps/landing-consultas:/usr/share/nginx/html/consultas:ro
+      - ./apps/landing-vendas:/usr/share/nginx/html/vendas:ro
+      - ./apps/admin:/usr/share/nginx/html/admin:ro
+    depends_on: [cadastro, agendamento, consulta, receita, venda, pedido, pagamento, entrega, estoque, admin]
+    networks: [backend]
+
+  postgres:
+    image: postgres:16-alpine
+    environment: { POSTGRES_USER: cm, POSTGRES_PASSWORD: cm }
+    volumes:
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - pgdata:/var/lib/postgresql/data
+    healthcheck: { test: ['CMD', 'pg_isready', '-U', 'cm'], interval: 5s, retries: 20 }
+    networks: [backend]
+
+  strapi:
+    build: ./apps/cms
+    restart: unless-stopped
+    ports: ['127.0.0.1:1337:1337']
+    environment:
+      DATABASE_HOST: postgres
+      DATABASE_NAME: strapi
+      DATABASE_USERNAME: cm
+      DATABASE_PASSWORD: cm
+      APP_KEYS: ${STRAPI_APP_KEYS:-a1,b2,c3,d4}
+      API_TOKEN_SALT: ${STRAPI_API_TOKEN_SALT:-salt}
+      ADMIN_JWT_SECRET: ${STRAPI_ADMIN_JWT_SECRET:-adminsecret}
+      TRANSFER_TOKEN_SALT: ${STRAPI_TRANSFER_TOKEN_SALT:-transfersalt}
+      JWT_SECRET: ${STRAPI_JWT_SECRET:-jwtsecret}
+    depends_on: { postgres: { condition: service_healthy } }
+    networks: [backend]
+
+  zabbix-server:
+    image: zabbix/zabbix-server-pgsql:alpine-7.0-latest
+    environment:
+      &zbxdb { DB_SERVER_HOST: postgres, POSTGRES_USER: cm, POSTGRES_PASSWORD: cm, POSTGRES_DB: zabbix }
+    depends_on: { postgres: { condition: service_healthy } }
+    networks: [backend]
+
+  zabbix-web:
+    image: zabbix/zabbix-web-nginx-pgsql:alpine-7.0-latest
+    ports: ['127.0.0.1:8081:8080']
+    environment: { <<: *zbxdb, ZBX_SERVER_HOST: zabbix-server, PHP_TZ: America/Sao_Paulo }
+    depends_on: [zabbix-server]
+    networks: [backend]
+
+  zabbix-agent:
+    image: zabbix/zabbix-agent2:alpine-7.0-latest
+    environment: { ZBX_HOSTNAME: cm-docker, ZBX_SERVER_HOST: zabbix-server }
+    networks: [backend]
+
+networks:
+  backend: {}
+
+volumes:
+  pgdata: {}

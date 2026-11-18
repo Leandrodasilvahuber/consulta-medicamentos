@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@600;700;800&family=Inter:wght@400;600;700&display=swap" rel="stylesheet" />
+  <title>Vitalis · Farmácia online</title>
+  <base href="/loja/" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/loja/"><img src="favicon.svg" alt="" /><span>Vitalis<br /><small>Farmácia online</small></span></a>
+    <nav><a href="#produtos">Medicamentos</a><a href="/">Agendar consulta</a><a href="/admin/paciente.html">Minha área</a><a href="/admin/">Backoffice</a></nav>
+  </header>
+  <section class="hero">
+    <div class="hero-inner">
+      <span class="eyebrow">💊 Medicamentos sob prescrição</span>
+      <h1>Seus <em>medicamentos</em> com receita, entregues em casa</h1>
+      <p class="lead">Escolha o medicamento. Já tem receita? Finalize. Não tem? Consulte um médico online em minutos.</p>
+      <a class="cta" href="#produtos">Ver medicamentos →</a>
+      <a class="cta ghost" href="/">Não tenho receita</a>
+      <div class="trust"><span>✓ Receita validada pelo farmacêutico</span><span>✓ Nota fiscal eletrônica</span><span>✓ Rastreio da entrega</span></div>
+    </div>
+  </section>
+  <main>
+    <ol class="steps"><li>Escolha o medicamento</li><li>Informe a receita</li><li>Pague</li><li>Receba em casa com NF</li></ol>
+    <div class="products" id="produtos"></div>
+    <div class="panel">
+      <form class="card" id="f">
+        <h2>Finalizar compra</h2>
+        <p class="hint">Medicamento selecionado: <b id="sel">—</b></p>
+        <input type="hidden" name="sku" id="sku" />
+        <label>Quantidade (caixas)<input name="qty" type="number" min="1" value="1" /></label>
+        <label>ID do paciente<input name="customerId" placeholder="preenchido após a consulta" required /></label>
+        <label>ID da receita<input name="prescriptionId" placeholder="preenchido após a consulta" required /></label>
+        <button class="btn">Comprar com minha receita</button>
+        <span class="muted">Sem receita? <a href="/">Agende sua consulta</a>. A venda é liberada só para o que o médico prescreveu, na quantidade da receita.</span>
+      </form>
+      <div class="card track"><h3>Acompanhamento do pedido</h3><ul id="log"></ul></div>
+    </div>
+  </main>
+  <footer>Vitalis Farmácia &amp; Clínica · demonstração fictícia, sem valor médico ou comercial · <a href="/">Consultas</a> · <a href="/admin/">Backoffice</a></footer>
+  <script src="api.js"></script>
+  <script>
+    loadCms('vendas');
+    function pick(sku, name) {
+      document.getElementById('sku').value = sku;
+      document.getElementById('sel').textContent = name;
+      document.querySelectorAll('.product').forEach((el) => el.classList.toggle('on', el.dataset.sku === sku));
+    }
+    api('/venda/products').then((ps) => {
+      const box = document.getElementById('produtos');
+      ps.forEach((p) => {
+        const el = document.createElement('div');
+        el.className = 'product';
+        el.dataset.sku = p.sku;
+        el.innerHTML = `<div class="box">${p.icon || '💊'}</div><span class="cat">${p.category || ''}</span>
+          <b>${p.name}</b><p>${p.description || ''}</p><span class="rx-badge">℞ venda sob prescrição</span>
+          <small>${p.sku}</small><span class="price">R$ ${p.price.toFixed(2).replace('.', ',')}</span>`;
+        el.onclick = () => pick(p.sku, p.name);
+        box.appendChild(el);
+      });
+      pick(ps[0].sku, ps[0].name);
+    });
+    try {
+      const saved = JSON.parse(localStorage.getItem('cm-rx') || 'null');
+      if (saved) for (const k in saved) document.querySelector(`[name=${k}]`).value = saved[k];
+    } catch (_e) { /* sem receita salva */ }
+    const LABEL = { AWAITING_STOCK: 'Reservando estoque', AWAITING_PAYMENT: 'Aguardando pagamento', PAID: 'Pagamento aprovado',
+      INVOICED: 'Nota fiscal emitida', SHIPPED: 'Pedido despachado', DELIVERED: 'Entregue!', CANCELLED: 'Pedido cancelado' };
+    document.getElementById('f').onsubmit = async (e) => {
+      e.preventDefault();
+      const d = Object.fromEntries(new FormData(e.target));
+      try {
+        const o = await api('/venda/checkout', {
+          customerId: d.customerId, prescriptionId: d.prescriptionId, items: [{ sku: d.sku, qty: Number(d.qty) }],
+        });
+        out(`Pedido recebido — total R$ ${o.total.toFixed(2).replace('.', ',')}`);
+        let last;
+        await poll(() => api('/pedido/orders/' + o.orderId), (p) => {
+          if (p.status !== last) {
+            last = p.status;
+            let msg = LABEL[p.status] || p.status;
+            if (p.status === 'INVOICED') msg += ` — NF nº ${p.invoice.number}. Aguardando a expedição despachar.`;
+            if (p.status === 'SHIPPED') msg += ' — rastreio ' + p.trackingCode;
+            if (p.status === 'CANCELLED') msg += ' — ' + (p.cancelReason || '');
+            out(msg);
+          }
+          return p.status === 'DELIVERED' || p.status === 'CANCELLED';
+        }, 600);
+      } catch (err) { out('Erro: ' + err.message); }
+    };
+  </script>
+</body>
+</html>

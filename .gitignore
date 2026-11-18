@@ -1,0 +1,9 @@
+node_modules
+.env
+.terraform
+*.tfstate*
+apps/cms/.tmp
+apps/cms/dist
+apps/cms/build
+apps/cms/.strapi
+volume

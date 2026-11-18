@@ -1,0 +1,51 @@
+/** Catálogo de medicamentos (fake) compartilhado por venda e estoque. Todos vendidos somente com receita. */
+export const CATALOG = [
+  {
+    sku: 'AMOXI-500',
+    name: 'Amoxicilina 500mg · 21 cápsulas',
+    price: 38.9,
+    category: 'Antibiótico',
+    icon: '💊',
+    description: 'Antibiótico de amplo espectro para infecções bacterianas.',
+  },
+  {
+    sku: 'LOSAR-50',
+    name: 'Losartana Potássica 50mg · 30 comp.',
+    price: 24.9,
+    category: 'Cardiovascular',
+    icon: '❤️',
+    description: 'Controle da pressão arterial (hipertensão).',
+  },
+  {
+    sku: 'METF-850',
+    name: 'Metformina 850mg · 30 comp.',
+    price: 18.9,
+    category: 'Endócrino',
+    icon: '🩸',
+    description: 'Controle da glicemia no diabetes tipo 2.',
+  },
+  {
+    sku: 'SERTR-50',
+    name: 'Sertralina 50mg · 30 comp.',
+    price: 54.9,
+    category: 'Controlado',
+    icon: '🧠',
+    description: 'Antidepressivo. Exige receita de controle especial.',
+  },
+  {
+    sku: 'OMEP-20',
+    name: 'Omeprazol 20mg · 28 cápsulas',
+    price: 21.9,
+    category: 'Digestivo',
+    icon: '🛡️',
+    description: 'Protetor gástrico para azia, gastrite e refluxo.',
+  },
+  {
+    sku: 'SALB-100',
+    name: 'Salbutamol 100mcg spray · 200 doses',
+    price: 29.9,
+    category: 'Respiratório',
+    icon: '🌬️',
+    description: 'Broncodilatador para alívio rápido de crises de asma.',
+  },
+];

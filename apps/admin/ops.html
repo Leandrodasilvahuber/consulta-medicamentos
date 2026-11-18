@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Operações</title>
+  <link rel="stylesheet" href="/admin/admin.css" />
+</head>
+<body>
+  <script src="/admin/admin.js"></script>
+  <script>nav();</script>
+  <main>
+    <h1>Operações</h1>
+    <p class="sub">Saúde do sistema event-driven: filas, erros, transações ponta a ponta, recursos e logs.</p>
+    <div class="kpis" id="kpis"></div>
+    <div class="tabs" id="tabs"></div>
+
+    <section data-tab="Filas & DLQ">
+      <div class="card"><h2>Filas SQS</h2><p class="muted">Mensagens que falham 5× vão para a DLQ. Corrija a causa e faça o <b>redrive</b>.</p><div id="queues"></div></div>
+      <div class="card" id="peek" hidden><h2>Mensagens em <span id="peek-name"></span></h2><div id="peek-body"></div></div>
+    </section>
+
+    <section data-tab="Transações">
+      <div class="card">
+        <h2>Rastreamento de transações</h2>
+        <form class="row" id="tq"><input name="q" placeholder="traceId, orderId, customerId, appointmentId..." size="48" /><button>Buscar</button></form>
+        <div id="traces" style="margin-top:10px"></div>
+      </div>
+      <div class="card" id="trace" hidden><h2>Trace <span class="mono" id="t-id"></span></h2><div id="t-events"></div><h2 style="margin-top:14px">Logs correlacionados</h2><pre id="t-logs"></pre></div>
+    </section>
+
+    <section data-tab="Recursos">
+      <div class="card"><h2>Inventário de memória e CPU por container</h2><p class="muted">Docker stats + métricas da aplicação (heap, event loop, eventos).</p><div id="res">carregando…</div></div>
+    </section>
+
+    <section data-tab="Inventário AWS">
+      <div class="grid"><div class="card"><h2>Tabelas DynamoDB</h2><div id="inv-t"></div></div><div class="card"><h2>Regras EventBridge (roteamento)</h2><div id="inv-r"></div></div></div>
+    </section>
+
+    <section data-tab="Logs">
+      <div class="card">
+        <form class="row" id="lq">
+          <input name="q" placeholder="texto / traceId" size="32" />
+          <select name="service"><option value="">todos os serviços</option></select>
+          <select name="level"><option value="">todos os níveis</option><option>error</option><option>warn</option><option>info</option></select>
+          <button>Filtrar</button><label><input type="checkbox" id="lauto" checked /> auto-atualizar</label>
+        </form>
+        <pre id="logs" style="max-height:600px;margin-top:10px"></pre>
+      </div>
+    </section>
+
+    <section data-tab="Zabbix">
+      <div class="card"><h2>Problemas ativos no Zabbix</h2><p class="muted">Hosts e triggers são provisionados automaticamente pelo admin. <a href="#" id="zbx-link" target="_blank">Abrir Zabbix</a> (Admin / zabbix)</p>
+      <div class="row"><button class="ghost" id="zbx-prov">Re-provisionar hosts</button></div><div id="zbx" style="margin-top:10px"></div></div>
+    </section>
+  </main>
+  <script>
+    const sections = [...document.querySelectorAll('section')];
+    let tab = localStorage.getItem('ops-tab') || sections[0].dataset.tab;
+    function show(t) {
+      tab = t; try { localStorage.setItem('ops-tab', t); } catch (e) { /* ok */ }
+      sections.forEach((s) => (s.hidden = s.dataset.tab !== t));
+      $('#tabs').innerHTML = sections.map((s) => `<button class="${s.dataset.tab === t ? 'on' : ''}" onclick="show('${s.dataset.tab}')">${s.dataset.tab}</button>`).join('');
+      refresh();
+    }
+    window.show = show;
+    $('#zbx-link').href = `http://${location.hostname}:8081`;
+    'cadastro agendamento consulta receita venda pedido pagamento estoque entrega nf-worker admin gateway localstack strapi'.split(' ')
+      .forEach((s) => $('[name=service]').insertAdjacentHTML('beforeend', `<option>${s}</option>`));
+
+    async function kpis() {
+      const o = await api('/admin/overview');
+      $('#kpis').innerHTML = [
+        [o.dlqTotal, 'mensagens em DLQ', o.dlqTotal > 0], [o.backlog, 'backlog nas filas'],
+        [`${o.containersUp}/${o.containersTotal}`, 'containers rodando', o.containersUp < o.containersTotal],
+        [o.zabbixProblems, 'problemas no Zabbix', o.zabbixProblems > 0], [o.faultsActive, 'falhas de caos ativas', o.faultsActive > 0],
+      ].map(([v, l, bad]) => `<div class="kpi"><b style="color:${bad ? 'var(--err)' : 'inherit'}">${v}</b><span>${l}</span></div>`).join('');
+    }
+    const loaders = {
+      'Filas & DLQ': async () => {
+        const qs = await api('/admin/queues');
+        $('#queues').innerHTML = table(qs, [
+          ['Fila', (q) => `<span class="mono">${esc(q.name)}</span> ${q.isDlq ? badge('DLQ') : ''}`],
+          ['Visíveis', (q) => `<b style="color:${q.isDlq && q.visible ? 'var(--err)' : 'inherit'}">${q.visible}</b>`, 'num'],
+          ['Em processamento', (q) => q.inFlight, 'num'],
+          ['', (q) => q.isDlq ? `<button class="ghost" onclick="peek('${q.name}')">Ver</button> <button onclick="redrive('${q.name.replace(/-dlq$/, '')}')">Redrive</button> <button class="danger" onclick="purge('${q.name}')">Descartar</button>` : ''],
+        ]);
+      },
+      Transações: async () => { if (!$('#traces').innerHTML) searchTraces(''); },
+      Recursos: async () => {
+        const rs = await api('/admin/resources');
+        rs.sort((a, b) => (b.memMb || 0) - (a.memMb || 0));
+        const total = rs.reduce((t, r) => t + (r.memMb || 0), 0);
+        $('#res').innerHTML = `<p><b>${total} MB</b> em uso no total · ${rs.length} containers</p>` + table(rs, [
+          ['Container', (r) => `<span class="mono">${esc(r.name)}</span>`], ['Estado', (r) => badge(r.state)],
+          ['Memória', (r) => r.memMb != null ? `${r.memMb} / ${r.memLimitMb} MB` : '–', 'num'],
+          ['', (r) => { const p = r.memLimitMb ? (r.memMb / r.memLimitMb) * 100 : 0; return `<div class="bar ${p > 80 ? 'hot' : ''}"><i style="width:${p}%"></i></div>`; }],
+          ['CPU', (r) => (r.cpuPct != null ? r.cpuPct + '%' : '–'), 'num'],
+          ['Heap', (r) => (r.app ? r.app.heap_used_mb + ' MB' : '–'), 'num'],
+          ['Event loop p99', (r) => (r.app ? r.app.event_loop_p99_ms + ' ms' : '–'), 'num'],
+          ['Eventos (ok/falha)', (r) => (r.app ? `${r.app.events_consumed} / <span style="color:var(--err)">${r.app.events_failed}</span>` : '–'), 'num'],
+          ['Uptime', (r) => esc(r.status)],
+        ]);
+      },
+      'Inventário AWS': async () => {
+        const inv = await api('/admin/inventory');
+        $('#inv-t').innerHTML = table(inv.tables, [['Tabela', (t) => `<span class="mono">${esc(t.name)}</span>`], ['Itens', (t) => t.items, 'num'], ['Bytes', (t) => t.bytes, 'num']]);
+        $('#inv-r').innerHTML = table(inv.rules, [['Regra', (r) => `<span class="mono">${esc(r.name)}</span>`], ['Padrão', (r) => `<span class="mono">${esc(r.pattern)}</span>`]]);
+      },
+      Logs: async () => {
+        if (!$('#lauto').checked && $('#logs').textContent) return;
+        const p = new URLSearchParams(Object.fromEntries(new FormData($('#lq'))));
+        const ls = await api('/admin/logs?' + p);
+        $('#logs').innerHTML = ls.map((l) => `<span class="log-${l.level || ''}">${esc((l.ts || '').slice(11, 23))} ${esc(l.container.replace('consulta-medicamentos-', '').padEnd(16))} ${esc((l.level || '').padEnd(5))} ${l.traceId ? '[' + esc(l.traceId.slice(0, 8)) + '] ' : ''}${esc(l.msg)} ${esc(Object.entries(l).filter(([k]) => !['ts', 'container', 'level', 'msg', 'service', 'traceId'].includes(k)).map(([k, v]) => k + '=' + (typeof v === 'object' ? JSON.stringify(v) : v)).join(' '))}</span>`).join('\n');
+      },
+      Zabbix: async () => {
+        const ps = await api('/admin/zabbix/problems').catch((e) => ({ error: e.message }));
+        $('#zbx').innerHTML = ps.error ? `<p class="muted">Zabbix indisponível: ${esc(ps.error)}</p>`
+          : table(ps, [['Desde', (p) => fmtDate(p.since)], ['Problema', (p) => esc(p.name)], ['Severidade', (p) => badge(['info', 'info', 'warn', 'warn', 'error', 'error'][p.severity])]], 'Nenhum problema ativo. ✅');
+      },
+    };
+    function refresh() { kpis().catch(() => {}); loaders[tab]?.().catch((e) => toast(e.message, true)); }
+
+    window.peek = async (name) => {
+      $('#peek').hidden = false; $('#peek-name').textContent = name;
+      const ms = await api(`/admin/queues/${name}/messages`);
+      $('#peek-body').innerHTML = table(ms, [
+        ['Enviada', (m) => fmtDate(m.sentAt)], ['Tipo', (m) => esc(m.type)], ['Tentativas', (m) => m.receiveCount, 'num'],
+        ['Trace', (m) => (m.traceId ? `<a href="#" onclick="openTrace('${m.traceId}');return false">${esc(m.traceId.slice(0, 8))}</a>` : '–')],
+        ['Corpo', (m) => `<span class="mono">${esc(JSON.stringify(m.body).slice(0, 220))}</span>`],
+      ], 'DLQ vazia.');
+    };
+    window.redrive = (q) => act(() => api(`/admin/queues/${q}/redrive`, {}).then((r) => { toast(`${r.moved} mensagens devolvidas para ${q}`); refresh(); }));
+    window.purge = (q) => confirm(`Descartar todas as mensagens de ${q}?`) && act(() => api(`/admin/queues/${q}/purge`, {}).then(refresh), 'DLQ descartada');
+
+    async function searchTraces(q) {
+      const ts = await api('/admin/traces?q=' + encodeURIComponent(q));
+      $('#traces').innerHTML = table(ts, [
+        ['Última atividade', (t) => fmtDate(t.last)], ['Trace', (t) => `<a href="#" onclick="openTrace('${t.traceId}');return false" class="mono">${esc(t.traceId)}</a>`],
+        ['Eventos', (t) => t.events, 'num'], ['Duração', (t) => (t.durationMs / 1000).toFixed(1) + ' s', 'num'],
+        ['Fluxo', (t) => t.types.map((x) => `<span class="badge">${esc(x)}</span>`).join(' ')],
+      ], 'Nenhuma transação encontrada.');
+    }
+    $('#tq').onsubmit = (e) => { e.preventDefault(); searchTraces(e.target.q.value); };
+    window.openTrace = async (id) => {
+      if (tab !== 'Transações') show('Transações');
+      const t = await api('/admin/traces/' + id);
+      const max = Math.max(1, ...t.events.map((e) => e.offsetMs));
+      $('#trace').hidden = false; $('#t-id').textContent = id;
+      $('#t-events').innerHTML = table(t.events, [
+        ['+ms', (e) => e.offsetMs, 'num'], ['Evento', (e) => `<b>${esc(e.type)}</b>`], ['Produtor', (e) => esc(e.producer)],
+        ['Linha do tempo', (e) => `<div class="wf" style="min-width:240px"><i style="left:calc(${(e.offsetMs / max) * 100}% - 3px)"></i></div>`],
+        ['Detalhe', (e) => `<span class="mono">${esc(JSON.stringify(Object.fromEntries(Object.entries(e.detail).filter(([k]) => !['eventId', 'traceId', 'occurredAt', 'producer'].includes(k)))).slice(0, 160))}</span>`],
+      ]);
+      $('#t-logs').innerHTML = t.logs.reverse().map((l) => `<span class="log-${l.level}">${esc((l.ts || '').slice(11, 23))} ${esc(l.container.replace('consulta-medicamentos-', '').padEnd(16))} ${esc(l.msg)} ${esc(l.type || '')} ${l.ms != null ? esc(l.ms + 'ms') : ''} ${esc(l.err || '')}</span>`).join('\n');
+      $('#trace').scrollIntoView({ behavior: 'smooth' });
+    };
+    $('#lq').onsubmit = (e) => { e.preventDefault(); $('#logs').textContent = ''; loaders.Logs(); };
+    $('#zbx-prov').onclick = () => act(() => api('/admin/zabbix/provision', {}), 'Zabbix provisionado');
+    const qp = new URLSearchParams(location.search);
+    show(qp.get('tab') || tab);
+    if (qp.get('trace')) openTrace(qp.get('trace'));
+    setInterval(refresh, 5000);
+  </script>
+</body>
+</html>

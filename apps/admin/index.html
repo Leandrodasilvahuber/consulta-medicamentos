@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Vitalis · Backoffice</title>
+  <link rel="stylesheet" href="/admin/admin.css" />
+</head>
+<body>
+  <script src="/admin/admin.js"></script>
+  <script>nav();</script>
+  <main>
+    <div class="hero-admin"><h1>✚ Backoffice Vitalis</h1>
+    <p>Escolha a sua área. Demo sem autenticação: em produção cada área exige o papel correspondente (RBAC).</p></div>
+    <div class="grid">
+      <a class="card" href="medico.html"><h2>🩺 Médico</h2><p class="muted">Fila de consultas, atender pela sala online e prescrever.</p></a>
+      <a class="card" href="paciente.html"><h2>🙂 Paciente</h2><p class="muted">Meus agendamentos, consultas, receitas, pedidos, NF e rastreio.</p></a>
+      <a class="card" href="estoque.html"><h2>📦 Estoquista</h2><p class="muted">Saldo por produto, entradas de fornecedor, ajustes e movimentações.</p></a>
+      <a class="card" href="expedicao.html"><h2>🚚 Expedidor</h2><p class="muted">Separação, despacho com NF e confirmação de entrega.</p></a>
+      <a class="card" href="ops.html"><h2>🛠️ Operações</h2><p class="muted">Filas e DLQ, rastreamento de transações, recursos, inventário, logs e Zabbix.</p></a>
+      <a class="card" href="caos.html"><h2>💥 Laboratório de Caos</h2><p class="muted">Injete falhas e verifique se o sistema se recupera sozinho.</p></a>
+    </div>
+  </main>
+</body>
+</html>

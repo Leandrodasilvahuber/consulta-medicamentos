@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Área do Paciente</title>
+  <link rel="stylesheet" href="/admin/admin.css" />
+</head>
+<body>
+  <script src="/admin/admin.js"></script>
+  <script>nav();</script>
+  <main>
+    <h1>Área do Paciente</h1>
+    <p class="sub">Tudo do paciente num só lugar: consultas, receitas e pedidos com NF e rastreio.</p>
+    <div class="demo">Demo: selecione o paciente (em produção seria o usuário logado).</div>
+    <div class="row card"><label>Paciente</label><select id="who"></select><a class="muted" href="/">+ agendar nova consulta</a></div>
+    <div class="grid">
+      <div class="card"><h2>Agendamentos e consultas</h2><div id="appts"></div></div>
+      <div class="card"><h2>Minhas receitas</h2><div id="rxs"></div></div>
+    </div>
+    <div class="card"><h2>Meus pedidos</h2><div id="orders"></div></div>
+  </main>
+  <script>
+    const STEPS = ['AWAITING_STOCK', 'AWAITING_PAYMENT', 'PAID', 'INVOICED', 'SHIPPED', 'DELIVERED'];
+    const LABEL = { AWAITING_STOCK: 'Estoque', AWAITING_PAYMENT: 'Pagamento', PAID: 'Pago', INVOICED: 'NF', SHIPPED: 'Enviado', DELIVERED: 'Entregue' };
+    api('/cadastro/customers').then((cs) => {
+      cs.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      $('#who').innerHTML = cs.map((c) => `<option value="${c.pk}">${esc(c.name)} — ${esc(c.email)}</option>`).join('');
+      every(4000, load);
+    });
+    $('#who').onchange = load;
+    async function load() {
+      const id = $('#who').value;
+      if (!id) return;
+      const [appts, cons, rxs, orders] = await Promise.all([
+        api('/agendamento/appointments?customerId=' + id), api('/consulta/consultations?customerId=' + id),
+        api('/receita/prescriptions?customerId=' + id), api('/pedido/orders?customerId=' + id),
+      ]);
+      $('#appts').innerHTML = table(appts, [
+        ['Horário', (a) => fmtDate(a.slot)], ['Pagamento', (a) => badge(a.status)],
+        ['Consulta', (a) => { const c = cons.find((x) => x.pk === a.pk); return c ? badge(c.status) + (c.status === 'SCHEDULED' ? ` <a href="${c.roomUrl}" target="_blank">entrar na sala</a>` : '') : '–'; }],
+      ], 'Nenhum agendamento.');
+      $('#rxs').innerHTML = table(rxs, [
+        ['Itens autorizados', (r) => r.items.map((i) => `${esc(i.sku)} (até ${i.maxQty})`).join('<br>')],
+        ['Validade', (r) => (new Date(r.expiresAt) > new Date() ? badge('válida') : badge('vencida')) + ' ' + fmtDate(r.expiresAt).slice(0, 10)],
+        ['', (r) => `<a href="/loja/" onclick='localStorage.setItem("cm-rx", JSON.stringify({prescriptionId:"${r.pk}",customerId:"${id}"}))'>comprar</a>`],
+      ], 'Nenhuma receita ainda.');
+      $('#orders').innerHTML = table(orders, [
+        ['Data', (o) => fmtDate(o.createdAt)], ['Itens', (o) => (o.lines || []).map((l) => `${l.qty}× ${esc(l.name)}`).join('<br>')],
+        ['Total', (o) => money(o.total), 'num'],
+        ['Andamento', (o) => o.status === 'CANCELLED' ? badge('CANCELLED') + ' ' + esc(o.cancelReason || '')
+          : STEPS.map((s, i) => `<span class="badge ${i <= STEPS.indexOf(o.status) ? 'ok' : ''}">${LABEL[s]}</span>`).join(' ')],
+        ['NF', (o) => (o.invoice ? `nº ${esc(o.invoice.number)}<br><span class="mono">${esc(o.invoice.accessKey)}</span>` : '–')],
+        ['Rastreio', (o) => esc(o.trackingCode || '–')],
+      ], 'Nenhum pedido.');
+    }
+  </script>
+</body>
+</html>

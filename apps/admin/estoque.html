@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Área do Estoquista</title>
+  <link rel="stylesheet" href="/admin/admin.css" />
+</head>
+<body>
+  <script src="/admin/admin.js"></script>
+  <script>nav();</script>
+  <main>
+    <h1>Área do Estoquista</h1>
+    <p class="sub">Saldo disponível (já descontadas as reservas), entradas de fornecedor e ajustes de inventário.</p>
+    <div class="kpis" id="kpis"></div>
+    <div class="grid">
+      <div class="card"><h2>Saldo por produto</h2><div id="stock"></div></div>
+      <div class="card">
+        <h2>Entrada / ajuste</h2>
+        <form class="row" id="adj">
+          <select name="sku" id="sku"></select>
+          <input name="delta" type="number" value="10" style="width:80px" title="positivo = entrada, negativo = baixa" />
+          <select name="supplierId" id="sup"><option value="">(sem fornecedor)</option></select>
+          <input name="reason" placeholder="motivo" value="entrada de fornecedor" />
+          <button>Lançar</button>
+        </form>
+        <p class="muted">Sem fornecedor cadastrado? <a href="#" id="newsup">criar fornecedor demo</a></p>
+      </div>
+    </div>
+    <div class="card"><h2>Pedidos afetados pelo estoque</h2><div id="affected"></div></div>
+    <div class="card"><h2>Movimentações recentes</h2><div id="moves"></div></div>
+  </main>
+  <script>
+    async function suppliers() {
+      const s = await api('/cadastro/suppliers');
+      $('#sup').innerHTML = '<option value="">(sem fornecedor)</option>' + s.map((x) => `<option value="${x.pk}">${esc(x.name)}</option>`).join('');
+    }
+    suppliers();
+    $('#newsup').onclick = (e) => { e.preventDefault(); act(() => api('/cadastro/suppliers', { name: 'Fornecedor Demo Ltda', cnpj: '00.000.000/0001-00' }).then(suppliers), 'Fornecedor criado'); };
+    async function load() {
+      const [stock, moves, orders] = await Promise.all([api('/estoque/stock'), api('/estoque/movements'), api('/pedido/orders')]);
+      stock.sort((a, b) => a.sku.localeCompare(b.sku));
+      if (!$('#sku').options.length) $('#sku').innerHTML = stock.map((s) => `<option>${s.sku}</option>`).join('');
+      const low = stock.filter((s) => s.available <= 5);
+      $('#kpis').innerHTML = `<div class="kpi"><b>${stock.reduce((t, s) => t + s.available, 0)}</b><span>unidades disponíveis</span></div>
+        <div class="kpi"><b style="color:${low.length ? 'var(--err)' : 'inherit'}">${low.length}</b><span>produtos com estoque baixo (≤5)</span></div>
+        <div class="kpi"><b>${orders.filter((o) => o.status === 'AWAITING_STOCK').length}</b><span>pedidos aguardando reserva</span></div>`;
+      $('#stock').innerHTML = table(stock, [
+        ['SKU', (s) => `<span class="mono">${esc(s.sku)}</span>`], ['Produto', (s) => esc(s.name)],
+        ['Disponível', (s) => s.available, 'num'],
+        ['', (s) => `<div class="bar ${s.available <= 5 ? 'hot' : ''}"><i style="width:${Math.min(100, s.available * 2)}%"></i></div>`],
+      ]);
+      $('#affected').innerHTML = table(orders.filter((o) => o.status === 'AWAITING_STOCK' || (o.cancelReason || '').includes('estoque')), [
+        ['Pedido', (o) => `<span class="mono">${esc(o.pk.slice(0, 8))}</span>`], ['Status', (o) => badge(o.status)],
+        ['Motivo', (o) => esc(o.cancelReason || 'aguardando reserva')],
+      ], 'Nenhum pedido bloqueado por estoque.');
+      $('#moves').innerHTML = table(moves.slice(0, 30), [
+        ['Quando', (m) => fmtDate(m.at)], ['SKU', (m) => esc(m.sku)],
+        ['Qtd', (m) => `<b style="color:${m.delta < 0 ? 'var(--err)' : 'var(--ok)'}">${m.delta > 0 ? '+' : ''}${m.delta}</b>`, 'num'],
+        ['Motivo', (m) => esc(m.reason)], ['Ref.', (m) => `<span class="mono">${esc((m.ref || '').slice(0, 8))}</span>`],
+      ]);
+    }
+    $('#adj').onsubmit = (e) => {
+      e.preventDefault();
+      const d = Object.fromEntries(new FormData(e.target));
+      act(() => api(`/estoque/stock/${d.sku}/adjust`, d).then(load), 'Movimentação lançada');
+    };
+    every(5000, load);
+  </script>
+</body>
+</html>

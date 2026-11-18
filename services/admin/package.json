@@ -1,0 +1,17 @@
+{
+  "name": "@cm/admin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "@cm/shared": "0.1.0",
+    "@aws-sdk/client-dynamodb": "^3.690.0",
+    "@aws-sdk/client-eventbridge": "^3.690.0",
+    "@aws-sdk/client-sqs": "^3.690.0",
+    "@aws-sdk/lib-dynamodb": "^3.690.0"
+  }
+}
