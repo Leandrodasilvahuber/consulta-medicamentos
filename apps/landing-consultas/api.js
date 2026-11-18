@@ -26,7 +26,7 @@ window.poll = async function (fn, ok, tries = 30) {
 };
 window.loadCms = async function (slug) {
   try {
-    const r = await fetch(`http://${location.hostname}:1337/api/landing-pages?filters[slug][$eq]=${slug}`);
+    const r = await fetch(`/cms/api/landing-pages?filters[slug][$eq]=${slug}`);
     const page = (await r.json()).data[0];
     if (!page) return;
     const safe = page.title.replace(

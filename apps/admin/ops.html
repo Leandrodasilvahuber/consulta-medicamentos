@@ -63,7 +63,7 @@
       refresh();
     }
     window.show = show;
-    $('#zbx-link').href = `http://${location.hostname}:8081`;
+    api('/admin/config').then((c) => ($('#zbx-link').href = `http://${location.hostname}:${c.zabbixPort}`)).catch(() => {});
     'cadastro agendamento consulta receita venda pedido pagamento estoque entrega nf-worker admin gateway localstack strapi'.split(' ')
       .forEach((s) => $('[name=service]').insertAdjacentHTML('beforeend', `<option>${s}</option>`));
 
@@ -110,7 +110,7 @@
         if (!$('#lauto').checked && $('#logs').textContent) return;
         const p = new URLSearchParams(Object.fromEntries(new FormData($('#lq'))));
         const ls = await api('/admin/logs?' + p);
-        $('#logs').innerHTML = ls.map((l) => `<span class="log-${l.level || ''}">${esc((l.ts || '').slice(11, 23))} ${esc(l.container.replace('consulta-medicamentos-', '').padEnd(16))} ${esc((l.level || '').padEnd(5))} ${l.traceId ? '[' + esc(l.traceId.slice(0, 8)) + '] ' : ''}${esc(l.msg)} ${esc(Object.entries(l).filter(([k]) => !['ts', 'container', 'level', 'msg', 'service', 'traceId'].includes(k)).map(([k, v]) => k + '=' + (typeof v === 'object' ? JSON.stringify(v) : v)).join(' '))}</span>`).join('\n');
+        $('#logs').innerHTML = ls.map((l) => `<span class="log-${l.level || ''}">${esc((l.ts || '').slice(11, 23))} ${esc(l.container.replace(/^consulta-medicamentos(-dev|-prod)?-/, '').padEnd(16))} ${esc((l.level || '').padEnd(5))} ${l.traceId ? '[' + esc(l.traceId.slice(0, 8)) + '] ' : ''}${esc(l.msg)} ${esc(Object.entries(l).filter(([k]) => !['ts', 'container', 'level', 'msg', 'service', 'traceId'].includes(k)).map(([k, v]) => k + '=' + (typeof v === 'object' ? JSON.stringify(v) : v)).join(' '))}</span>`).join('\n');
       },
       Zabbix: async () => {
         const ps = await api('/admin/zabbix/problems').catch((e) => ({ error: e.message }));
@@ -151,7 +151,7 @@
         ['Linha do tempo', (e) => `<div class="wf" style="min-width:240px"><i style="left:calc(${(e.offsetMs / max) * 100}% - 3px)"></i></div>`],
         ['Detalhe', (e) => `<span class="mono">${esc(JSON.stringify(Object.fromEntries(Object.entries(e.detail).filter(([k]) => !['eventId', 'traceId', 'occurredAt', 'producer'].includes(k)))).slice(0, 160))}</span>`],
       ]);
-      $('#t-logs').innerHTML = t.logs.reverse().map((l) => `<span class="log-${l.level}">${esc((l.ts || '').slice(11, 23))} ${esc(l.container.replace('consulta-medicamentos-', '').padEnd(16))} ${esc(l.msg)} ${esc(l.type || '')} ${l.ms != null ? esc(l.ms + 'ms') : ''} ${esc(l.err || '')}</span>`).join('\n');
+      $('#t-logs').innerHTML = t.logs.reverse().map((l) => `<span class="log-${l.level}">${esc((l.ts || '').slice(11, 23))} ${esc(l.container.replace(/^consulta-medicamentos(-dev|-prod)?-/, '').padEnd(16))} ${esc(l.msg)} ${esc(l.type || '')} ${l.ms != null ? esc(l.ms + 'ms') : ''} ${esc(l.err || '')}</span>`).join('\n');
       $('#trace').scrollIntoView({ behavior: 'smooth' });
     };
     $('#lq').onsubmit = (e) => { e.preventDefault(); $('#logs').textContent = ''; loaders.Logs(); };

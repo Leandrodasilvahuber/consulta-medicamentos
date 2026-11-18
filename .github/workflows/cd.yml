@@ -1,26 +1,71 @@
-name: CD (LocalStack)
+name: CD
+# develop -> ambiente dev (automático) · main -> ambiente prod (exige aprovação no environment "prod")
 on:
   workflow_run:
     workflows: [CI]
     types: [completed]
-    branches: [main]
+    branches: [develop, main]
   workflow_dispatch:
+    inputs:
+      environment:
+        description: Ambiente
+        type: choice
+        options: [dev, prod]
+        default: dev
+
+permissions:
+  contents: read
+  packages: write
 
 jobs:
-  deploy-localstack:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+  plan:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
+    outputs:
+      env: ${{ steps.p.outputs.env }}
+      sha: ${{ steps.p.outputs.sha }}
+    steps:
+      - id: p
+        env:
+          INPUT_ENV: ${{ inputs.environment }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "env=$INPUT_ENV" >> "$GITHUB_OUTPUT"; echo "sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          else
+            [ "$BRANCH" = "main" ] && e=prod || e=dev
+            echo "env=$e" >> "$GITHUB_OUTPUT"; echo "sha=$RUN_SHA" >> "$GITHUB_OUTPUT"
+          fi
+
+  deploy:
+    needs: plan
+    name: Deploy ${{ needs.plan.outputs.env }}
+    runs-on: ubuntu-latest
+    environment: ${{ needs.plan.outputs.env }}
+    concurrency: deploy-${{ needs.plan.outputs.env }}
     steps:
       - uses: actions/checkout@v4
-      - name: Sobe stack (LocalStack + serviços)
-        run: docker compose up -d --build localstack cadastro agendamento consulta receita venda pedido pagamento entrega nf-worker gateway
-      - name: Aguarda gateway
-        run: for i in $(seq 1 60); do curl -sf localhost:8080/health && break; sleep 2; done
+        with: { ref: '${{ needs.plan.outputs.sha }}' }
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Imagem a promover
+        run: |
+          echo "REPO_IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}:sha-${{ needs.plan.outputs.sha }}" >> "$GITHUB_ENV"
+      - name: Sobe o ambiente na LocalStack e roda o smoke test e2e
+        env: { CORE_ONLY: '1' }
+        run: bash scripts/deploy.sh ${{ needs.plan.outputs.env }}
       - uses: hashicorp/setup-terraform@v3
-      - name: Terraform (EC2/ASG na LocalStack)
+      - name: Terraform (worker de NF / EC2 na LocalStack)
         working-directory: infra/terraform
-        run: terraform init && terraform apply -auto-approve
-      - name: E2E
-        run: bash scripts/e2e.sh
+        run: |
+          set -a; . "../../env/${{ needs.plan.outputs.env }}.env"; set +a
+          terraform init && terraform apply -auto-approve -var "endpoint=http://localhost:$LOCALSTACK_PORT"
+      - name: Marca a imagem como a versão atual do ambiente
+        run: docker buildx imagetools create -t "$REPO_IMAGE:${{ needs.plan.outputs.env }}" "$IMAGE"
       - if: failure()
-        run: docker compose logs --tail=200
+        run: docker compose --env-file env/${{ needs.plan.outputs.env }}.env logs --tail=200

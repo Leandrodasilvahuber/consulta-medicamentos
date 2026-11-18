@@ -39,7 +39,7 @@ resource "aws_launch_template" "nf_worker" {
   instance_type = "t3.small"
   user_data = base64encode(<<-EOT
     #!/bin/bash
-    docker run -d --restart always -e SERVICE=nf-worker -e AWS_ENDPOINT=${var.endpoint} cm-node:local
+    docker run -d --restart always -e SERVICE=nf-worker -e AWS_ENDPOINT=${var.endpoint} consulta-medicamentos:local
   EOT
   )
 }

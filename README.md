@@ -56,6 +56,39 @@ Saga da compra: `OrderPlaced → StockReserved → OrderCreated → PaymentAppro
 (expedidor despacha) `ShipmentDispatched → ShipmentDelivered`. Falta de estoque ou pagamento recusado levam o
 pedido a `CANCELLED`, e o estoque é devolvido.
 
+## Ambientes (dev e prod) e CI/CD
+
+|                                        | **dev**                     | **prod**                                  |
+| -------------------------------------- | --------------------------- | ----------------------------------------- |
+| Branch                                 | `develop`                   | `main`                                    |
+| Arquivo                                | `env/dev.env`               | `env/prod.env`                            |
+| Projeto compose                        | `consulta-medicamentos-dev` | `consulta-medicamentos-prod`              |
+| Réplicas por serviço                   | 1                           | 2 (redundância)                           |
+| Zabbix                                 | desligado                   | ligado (profile `observabilidade`)        |
+| Gateway / Strapi / LocalStack / Zabbix | 8080 / 1337 / 4566 / 8081   | 9080 / 9337 / 5566 / 9081                 |
+| Deploy                                 | automático                  | **exige aprovação** no environment `prod` |
+
+Os dois ambientes podem rodar ao mesmo tempo na mesma máquina, porque o nome do projeto e as portas são diferentes.
+
+```bash
+bash scripts/deploy.sh dev     # sobe dev com build local + smoke test e2e
+bash scripts/deploy.sh prod    # idem para prod
+bash scripts/stop.sh prod      # para um ambiente
+IMAGE=ghcr.io/leandrodasilvahuber/consulta-medicamentos:prod bash scripts/deploy.sh prod   # usa a imagem publicada
+```
+
+**Fluxo:** feature → PR para `develop` → merge (deploy em dev) → PR `develop` → `main` → merge → aprovação → deploy em prod.
+
+- **CI** (`.github/workflows/ci.yml`), em todo PR e push para `develop`/`main`: lint, prettier, testes, `npm audit`,
+  `compose config` dos dois ambientes, hadolint, shellcheck e terraform validate. No push, gera a imagem
+  **uma única vez** e publica no GHCR como `sha-<commit>`.
+- **CD** (`.github/workflows/cd.yml`), quando a CI passa: escolhe o ambiente pela branch, sobe a LocalStack com a
+  **mesma imagem** testada (sem rebuild), aplica o Terraform e roda o e2e. Se tudo passar, marca a imagem como `:dev`
+  ou `:prod` (promoção). Também dá para disparar manualmente (Actions → CD → Run workflow).
+- Os ambientes rodam na LocalStack dentro do runner do GitHub, que é efêmero. O CD funciona como um deploy de
+  verificação: a stack sobe, é testada e o runner é descartado. Para rodar de forma contínua, use o
+  `scripts/deploy.sh` com a tag `:dev` ou `:prod` na sua máquina.
+
 ### Disponibilidade e redundância
 
 - **2 réplicas** por serviço (competing consumers na mesma fila SQS), limite de memória por container.
@@ -122,5 +155,5 @@ infra/            bootstrap LocalStack, gateway nginx, terraform (EC2/ASG), post
 - Postgres único para Strapi e Zabbix.
 - O caos nunca afeta o próprio `admin`, para sempre ser possível desligá-lo.
 
-> **Rodando junto com o projeto `cannabis-medicinal`:** as duas stacks usam as mesmas portas (8080, 1337, 4566, 8081).
-> Pare uma (`scripts/stop.sh`) antes de subir a outra.
+> **Rodando junto com o projeto `cannabis-medicinal`:** o ambiente dev usa as mesmas portas dele (8080, 1337, 4566, 8081).
+> Pare um antes de subir o outro, ou use o ambiente prod deste projeto (portas 9xxx).

@@ -251,6 +251,10 @@ const routes = {
   'GET /logs': ({ query }) => aggregatedLogs(query),
   'GET /traces': ({ query }) => traces(query.q),
   'GET /traces/:id': ({ params }) => trace(params.id),
+  'GET /config': () => ({
+    env: process.env.APP_ENV || 'dev',
+    zabbixPort: Number(process.env.ZABBIX_PORT || 8081),
+  }),
   'GET /zabbix/problems': () => zabbix.problems(),
   'POST /zabbix/provision': () => zabbix.provision().then(() => ({ ok: true })),
 
